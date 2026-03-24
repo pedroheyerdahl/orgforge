@@ -19,9 +19,12 @@ Two core mechanisms:
 
 from __future__ import annotations
 
+import logging
 import random
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, List
+
+logger = logging.getLogger("orgforge.simclock")
 
 if TYPE_CHECKING:
     pass  # State imported at runtime to avoid circular imports
@@ -73,11 +76,10 @@ class SimClock:
         Returns (artifact_timestamp, new_cursor_horizon).
         artifact_timestamp is randomly sampled from within the work block.
         """
-        current = self._get_cursor(actor)
+        current = self._state.actor_cursors.get(actor, self._get_default_start())
         delta = timedelta(hours=hours)
         end_time = self._enforce_business_hours(current + delta)
 
-        # Sample a random time within the block for the actual JIRA/Confluence timestamp
         total_seconds = int((end_time - current).total_seconds())
         if total_seconds > 0:
             random_offset = random.randint(0, total_seconds)
@@ -85,7 +87,8 @@ class SimClock:
         else:
             artifact_time = current
 
-        self._set_cursor(actor, end_time)
+        self._state.actor_cursors[actor] = end_time
+
         return artifact_time, end_time
 
     def sync_and_tick(
@@ -232,11 +235,13 @@ class SimClock:
     def _sync_time(self, actors: List[str]) -> datetime:
         """Finds the latest cursor among actors and pulls everyone up to it."""
         if not actors:
-            return self._get_cursor("system")
+            default = self._get_default_start()
+            return self._state.actor_cursors.get("system", default)
 
-        max_time = max(self._get_cursor(a) for a in actors)
+        default = self._get_default_start()
+        max_time = max(self._state.actor_cursors.get(a, default) for a in actors)
         for a in actors:
-            self._set_cursor(a, max_time)
+            self._state.actor_cursors[a] = max_time
 
         return max_time
 
@@ -256,8 +261,16 @@ class SimClock:
 
         # Roll forward to next business day 09:00
         next_day = dt + timedelta(days=1)
-        while next_day.weekday() >= 5:
+        max_skip = 7
+        for _ in range(max_skip):
+            if next_day.weekday() < 5:
+                break
             next_day += timedelta(days=1)
+        else:
+            logger.error(
+                f"[SimClock] Could not find next business day from {dt} — "
+                f"falling back to Monday of next week."
+            )
 
         return next_day.replace(
             hour=DAY_START_HOUR,

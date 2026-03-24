@@ -19,7 +19,13 @@ Responsibilities:
 Supported namespaces (extensible via the same _allocate() core):
   Confluence  →  next_id("ENG")      → "CONF-ENG-001"
                  next_id("MKT")      → "CONF-MKT-001"
-  JIRA        →  next_jira_id()      → "ORG-100"
+  JIRA        →  next_jira_id("ENG")   → "ENG-100"
+                 next_jira_id("HR")    → "HR-100"
+                 next_jira_id("SALES") → "SALES-100"
+                 next_jira_id("PROD")  → "PROD-100"
+                 next_jira_id("DES")   → "DES-100"
+                 next_jira_id("QA")    → "QA-100"
+                 next_jira_id()        → "ORG-100"  (legacy fallback)
 
 Callers that previously constructed IDs manually:
 
@@ -35,6 +41,7 @@ from __future__ import annotations
 
 import re
 import logging
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -52,6 +59,24 @@ _CONF_REF_RE = re.compile(r"\bCONF-[A-Z]+-\d+\b")
 # precision. ~9 000 chars ≈ ~750 tokens — well inside any embedder's window.
 DEFAULT_CHUNK_CHARS = 12_000
 DEFAULT_CHUNK_OVERLAP = 400
+
+# ── JIRA project key mapping ──────────────────────────────────────────────────
+# Maps org_chart department names to their JIRA project prefix.
+# Engineering_Backend and Engineering_Mobile share ENG — engineers work across
+# both and PRs reference the same ticket space.
+# Add new departments here; any unmapped dept falls back to "ORG".
+JIRA_DEPT_PREFIX: dict[str, str] = {
+    "Engineering_Backend": "ENG",
+    "Engineering_Mobile": "ENG",
+    "HR_Ops": "HR",
+    "Sales_Marketing": "SALES",
+    "Design": "DES",
+    "QA_Support": "QA",
+    "Product": "PROD",
+}
+
+# Starting sequence number for every JIRA project (mirrors original ORG-100 convention)
+_JIRA_START = 99
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -166,7 +191,13 @@ class ArtifactRegistry:
         self._base = base_export_dir
 
         self._confluence: Dict[str, str] = {}  # CONF-ENG-001 → title
-        self._jira: Dict[str, int] = {}  # ORG-100      → 100
+        self._jira: Dict[str, int] = {}  # ENG-100, HR-100, … → seq num
+
+        # Single lock for all allocation and registration operations.
+        # Acquired by next_id(), next_jira_id(), register_confluence(),
+        # and register_jira() so parallel genesis batches and sprint
+        # ticket generation can't race on the same counter.
+        self._lock = threading.Lock()
 
         self._seed_from_mongo()
 
@@ -184,11 +215,15 @@ class ArtifactRegistry:
                 self._confluence[doc["_id"]] = doc.get("title", "")
 
             # Seed JIRA (from new dedicated tickets collection)
+            # IDs may now be ENG-100, HR-101, SALES-102, etc.
+            # Parse by splitting on the last '-' so any prefix works.
             for doc in self._mem._jira.find({}, {"id": 1}):
-                jid = doc["id"]
-                suffix = jid.replace("ORG-", "")
-                if suffix.isdigit():
-                    self._jira[jid] = int(suffix)
+                jid = doc.get("id", "")
+                if not jid:
+                    continue
+                parts = jid.rsplit("-", 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    self._jira[jid] = int(parts[1])
 
             logger.info(
                 f"[registry] Seeded {len(self._confluence)} CONF + {len(self._jira)} JIRA IDs."
@@ -230,18 +265,22 @@ class ArtifactRegistry:
         next_id("ENG") → "CONF-ENG-001"
         next_id("ENG") → "CONF-ENG-002"   (second call)
         next_id("MKT") → "CONF-MKT-001"   (independent sequence)
+
+        Thread-safe: the lock ensures two concurrent genesis batches
+        can't read the same high-water mark and produce duplicate IDs.
         """
         pat = f"CONF-{prefix}-"
-        new_id = self._allocate(
-            store=self._confluence,
-            existing_nums_fn=lambda s: [
-                int(k[len(pat) :])
-                for k in s
-                if k.startswith(pat) and k[len(pat) :].isdigit()
-            ],
-            make_id_fn=lambda n: f"CONF-{prefix}-{n:03d}",
-            reserve_value="__reserved__",
-        )
+        with self._lock:
+            new_id = self._allocate(
+                store=self._confluence,
+                existing_nums_fn=lambda s: [
+                    int(k[len(pat) :])
+                    for k in s
+                    if k.startswith(pat) and k[len(pat) :].isdigit()
+                ],
+                make_id_fn=lambda n: f"CONF-{prefix}-{n:03d}",
+                reserve_value="__reserved__",
+            )
         logger.debug(f"[registry] Allocated Confluence ID: {new_id}")
         return new_id
 
@@ -250,13 +289,14 @@ class ArtifactRegistry:
         Confirm a pre-allocated Confluence ID with its final title.
         Raises DuplicateArtifactError if already confirmed.
         """
-        current = self._confluence.get(conf_id)
-        if current is not None and current != "__reserved__":
-            raise DuplicateArtifactError(
-                f"[registry] Duplicate Confluence ID '{conf_id}'. "
-                f"Existing title: '{current}'."
-            )
-        self._confluence[conf_id] = title
+        with self._lock:
+            current = self._confluence.get(conf_id)
+            if current is not None and current != "__reserved__":
+                raise DuplicateArtifactError(
+                    f"[registry] Duplicate Confluence ID '{conf_id}'. "
+                    f"Existing title: '{current}'."
+                )
+            self._confluence[conf_id] = title
         logger.debug(f"[registry] Confirmed Confluence {conf_id}: {title}")
 
     # Backward-compat alias kept so old callers and chunk_into_pages don't break
@@ -273,28 +313,36 @@ class ArtifactRegistry:
     # JIRA  —  allocation & registration
     # ─────────────────────────────────────────────
 
-    def next_jira_id(self) -> str:
+    def next_jira_id(self, prefix: str = "ORG") -> str:
         """
-        Allocate the next available JIRA ticket ID.
+        Allocate the next available JIRA ticket ID for a given project prefix.
 
-        Starts at ORG-100 (matching the original convention) and increments
-        from there. Each call pre-reserves the slot immediately.
+        next_jira_id("ENG")   → "ENG-100", "ENG-101", …
+        next_jira_id("HR")    → "HR-100",  "HR-101",  …  (independent sequence)
+        next_jira_id()        → "ORG-100"               (legacy fallback)
+
+        Each prefix maintains its own counter starting at 100, mirroring the
+        original ORG-100 convention. Sequences are fully independent — ENG and
+        HR can both be at -101 without conflict.
+
+        Thread-safe: the lock prevents concurrent sprint ticket generation
+        threads from racing on the same counter.
         """
-        new_id = self._allocate(
-            store=self._jira,
-            # Parse the highest number from the keys, not the values
-            existing_nums_fn=lambda s: (
-                [
-                    int(k.replace("ORG-", ""))
-                    for k in s.keys()
-                    if k.startswith("ORG-") and k.replace("ORG-", "").isdigit()
-                ]
-                if s
-                else [99]
-            ),
-            make_id_fn=lambda n: f"ORG-{n}",
-            reserve_value=0,  # 0 = reserved sentinel; confirmed in register_jira
-        )
+        pat = f"{prefix}-"
+        with self._lock:
+            new_id = self._allocate(
+                store=self._jira,
+                existing_nums_fn=lambda s: (
+                    [
+                        int(k[len(pat) :])
+                        for k in s.keys()
+                        if k.startswith(pat) and k[len(pat) :].isdigit()
+                    ]
+                    or [_JIRA_START]
+                ),
+                make_id_fn=lambda n: f"{prefix}-{n}",
+                reserve_value=0,
+            )
         logger.debug(f"[registry] Allocated JIRA ID: {new_id}")
         return new_id
 
@@ -302,15 +350,19 @@ class ArtifactRegistry:
         """
         Confirm a pre-allocated JIRA ID.
         Raises DuplicateArtifactError if already confirmed.
+        Accepts any prefix (ENG-100, HR-101, ORG-100, etc.).
         """
-        suffix = jira_id.replace("ORG-", "")
-        if not suffix.isdigit():
+        parts = jira_id.rsplit("-", 1)
+        if len(parts) != 2 or not parts[1].isdigit():
             raise ValueError(f"[registry] Malformed JIRA ID: '{jira_id}'")
-        n = int(suffix)
-        current = self._jira.get(jira_id)
-        if current is not None and current != 0:
-            raise DuplicateArtifactError(f"[registry] Duplicate JIRA ID '{jira_id}'.")
-        self._jira[jira_id] = n
+        n = int(parts[1])
+        with self._lock:
+            current = self._jira.get(jira_id)
+            if current is not None and current != 0:
+                raise DuplicateArtifactError(
+                    f"[registry] Duplicate JIRA ID '{jira_id}'."
+                )
+            self._jira[jira_id] = n
         logger.debug(f"[registry] Confirmed JIRA {jira_id}")
 
     def jira_exists(self, jira_id: str) -> bool:

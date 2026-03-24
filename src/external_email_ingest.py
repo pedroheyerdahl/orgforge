@@ -508,7 +508,7 @@ class ExternalEmailIngestor:
     def _product_opens_jira(
         self, signal, product_lead, state, date_str
     ) -> Optional[str]:
-        ticket_id = self._registry.next_jira_id()
+        ticket_id = self._registry.next_jira_id("PROD")
         self._registry.register_jira(ticket_id)
         jira_time, _ = self._clock.sync_and_advance([product_lead], hours=0.3)
 
