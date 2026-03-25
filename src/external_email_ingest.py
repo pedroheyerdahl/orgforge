@@ -57,10 +57,11 @@ from config_loader import COMPANY_DESCRIPTION
 from crewai import Crew, Task
 from memory import Memory, SimEvent
 from insider_threat import _NullInjector
+from utils.persona_utils import get_voice_card
 
 logger = logging.getLogger("orgforge.external_email")
 
-# ── Probability knobs ─────────────────────────────────────────────────────────
+
 _PROB_ALWAYS = 0.40
 _PROB_INCIDENT = 0.70
 _PROB_INCIDENT_QUIET = 0.10
@@ -70,11 +71,6 @@ _PROB_CUSTOMER_JIRA = 0.55  # high-priority customer complaint → JIRA
 _PROB_VENDOR_JIRA = 0.45  # vendor alert → JIRA task
 _DEFAULT_SOURCE_COUNT = 7
 _HR_EMAIL_WINDOW = (1, 3)  # days before hire arrival to send email
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DATA MODEL
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -90,15 +86,15 @@ class ExternalEmailSignal:
     source_name: str
     source_org: str
     source_email: str
-    internal_liaison: str  # dept name
+    internal_liaison: str
     subject: str
-    body_preview: str  # ≤200 chars for planner prompt injection
+    body_preview: str
     full_body: str
     tone: str
     topic: str
     timestamp_iso: str
     embed_id: str
-    category: str  # "vendor" | "customer" | "hr_outbound"
+    category: str
     dropped: bool = False
     eml_path: str = ""
     causal_chain: Optional[CausalChainHandler] = None
@@ -113,11 +109,6 @@ class ExternalEmailSignal:
             f"[INBOUND EMAIL] From: {self.source_name} ({self.source_org}) "
             f'— Subject: "{self.subject}" — Preview: {self.body_preview}'
         )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN CLASS
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 class ExternalEmailIngestor:
@@ -150,7 +141,7 @@ class ExternalEmailIngestor:
         leads: Dict[str, str],
         org_chart: Dict[str, List[str]],
         personas: Dict[str, dict],
-        registry,  # ArtifactRegistry
+        registry,
         clock,
         threat_injector=None,
     ):
@@ -175,14 +166,9 @@ class ExternalEmailIngestor:
         self._sources: Optional[List[dict]] = None
         self._threat = threat_injector or _NullInjector()
 
-        # Index scheduled hires by day for O(1) lookup
         self._scheduled_hires: Dict[int, List[dict]] = {}
         for hire in config.get("org_lifecycle", {}).get("scheduled_hires", []):
             self._scheduled_hires.setdefault(hire["day"], []).append(hire)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # GENESIS
-    # ─────────────────────────────────────────────────────────────────────────
 
     def generate_sources(self) -> List[dict]:
         """
@@ -268,10 +254,6 @@ class ExternalEmailIngestor:
             )
         return sources
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # DAILY — PRE-STANDUP  (vendor alerts only)
-    # ─────────────────────────────────────────────────────────────────────────
-
     def generate_pre_standup(self, state) -> List[ExternalEmailSignal]:
         """
         Vendor / automated alerts arriving 06:00–08:59.
@@ -301,10 +283,6 @@ class ExternalEmailIngestor:
         if signals:
             logger.info(f"  [cyan]📬 {len(signals)} vendor alert(s) pre-standup[/cyan]")
         return signals
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # DAILY — BUSINESS HOURS  (customer emails + gatekeeper chain)
-    # ─────────────────────────────────────────────────────────────────────────
 
     def generate_business_hours(self, state) -> List[ExternalEmailSignal]:
         """
@@ -352,10 +330,6 @@ class ExternalEmailIngestor:
             )
         return signals
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # DAILY — HR OUTBOUND
-    # ─────────────────────────────────────────────────────────────────────────
-
     def generate_hr_outbound(self, state) -> None:
         """
         Fires 1–3 days before a scheduled hire arrives.
@@ -375,10 +349,6 @@ class ExternalEmailIngestor:
                 self._send_hr_outbound(hire, hr_lead, days_until, state, date_str)
                 hire["_hr_email_sent"] = True
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # ROUTING — customer → Sales → Product gatekeeper
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _route_customer_email(self, signal: ExternalEmailSignal, state) -> None:
         date_str = str(state.current_date.date())
         sales_lead = self._leads.get(
@@ -387,14 +357,12 @@ class ExternalEmailIngestor:
         product_dept = next((d for d in self._leads if "product" in d.lower()), None)
         product_lead = self._leads.get(product_dept, sales_lead)
 
-        # Hop 1: Sales pings Product on Slack
         thread_id = self._sales_pings_product(
             signal, sales_lead, product_lead, state, date_str
         )
         if thread_id:
             signal.causal_chain.append(thread_id)
 
-        # Hop 2: Product decides — high priority → JIRA
         is_high = signal.tone in ("frustrated", "urgent") or (
             state.system_health < 70 and "stability" in signal.topic.lower()
         )
@@ -403,7 +371,6 @@ class ExternalEmailIngestor:
             if ticket_id:
                 signal.causal_chain.append(ticket_id)
 
-        # Hop 3: Sales sends acknowledgment reply to the customer
         reply_id = self._send_customer_reply(
             signal, sales_lead, is_high, state, date_str
         )
@@ -439,10 +406,15 @@ class ExternalEmailIngestor:
         participants = [sales_lead, product_lead]
         ping_time, _ = self._clock.sync_and_advance(participants, hours=0.25)
 
+        backstory = get_voice_card(
+            sales_lead, "async", graph_dynamics=None, mem=self._mem
+        )
+        p = self._personas.get(sales_lead, {})
+
         agent = make_agent(
-            role=f"{sales_lead}, Sales Lead",
-            goal="Summarise a customer email for Product on Slack.",
-            backstory=self._persona_hint(sales_lead),
+            role=f"{sales_lead} — {p.get('social_role', 'Sales Lead')}",
+            goal="Summarise a customer email for Product on Slack naturally in your own voice.",
+            backstory=backstory,
             llm=self._worker_llm,
         )
         task = Task(
@@ -453,7 +425,7 @@ class ExternalEmailIngestor:
                 f"1. Summarises what {signal.source_name} is asking (2 sentences)\n"
                 f"2. States urgency: high / medium / low\n"
                 f"3. Ends with a concrete ask for {product_lead}\n"
-                f"Under 80 words. No bullets. Write as {sales_lead}."
+                f"Under 80 words. No bullets. Write as {sales_lead} using your typing quirks."
             ),
             expected_output="Slack message under 80 words.",
             agent=agent,
@@ -512,10 +484,15 @@ class ExternalEmailIngestor:
         self._registry.register_jira(ticket_id)
         jira_time, _ = self._clock.sync_and_advance([product_lead], hours=0.3)
 
+        backstory = get_voice_card(
+            product_lead, "async", graph_dynamics=None, mem=self._mem
+        )
+        p = self._personas.get(product_lead, {})
+
         agent = make_agent(
-            role=f"{product_lead}, Product Manager",
+            role=f"{product_lead} — {p.get('social_role', 'Product Manager')}",
             goal="Write a JIRA ticket from a customer complaint.",
-            backstory=self._persona_hint(product_lead),
+            backstory=backstory,
             llm=self._worker_llm,
         )
         task = Task(
@@ -587,15 +564,10 @@ class ExternalEmailIngestor:
         )
         return ticket_id
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # ROUTING — vendor emails
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _route_vendor_email(self, signal: ExternalEmailSignal, state) -> None:
         date_str = str(state.current_date.date())
         recipient = self._find_expert_for_topic(signal.topic, signal.internal_liaison)
 
-        # Attach to live incident chain if topic overlaps root cause
         for inc in state.active_incidents:
             if any(
                 kw in signal.topic.lower()
@@ -608,13 +580,11 @@ class ExternalEmailIngestor:
                 )
                 break
 
-        # Optional JIRA task
         if signal.tone == "urgent" or random.random() < _PROB_VENDOR_JIRA:
             ticket_id = self._engineer_opens_jira(signal, recipient, state, date_str)
             if ticket_id:
                 signal.causal_chain.append(ticket_id)
 
-        # Outbound acknowledgment reply to the vendor
         ack_id = self._send_vendor_ack(signal, recipient, state, date_str)
         if ack_id:
             signal.causal_chain.append(ack_id)
@@ -708,10 +678,6 @@ class ExternalEmailIngestor:
         )
         return ticket_id
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # HR OUTBOUND
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _send_hr_outbound(self, hire, hr_lead, days_until, state, date_str) -> None:
         name = hire["name"]
         role = hire.get("role", "team member")
@@ -727,10 +693,13 @@ class ExternalEmailIngestor:
 
         hr_time, _ = self._clock.sync_and_advance([hr_lead], hours=0.5)
 
+        backstory = get_voice_card(hr_lead, "async", graph_dynamics=None, mem=self._mem)
+        p = self._personas.get(hr_lead, {})
+
         agent = make_agent(
-            role=f"{hr_lead}, HR Lead",
+            role=f"{hr_lead} — {p.get('social_role', 'HR Lead')}",
             goal=f"Write a {email_type.replace('_', ' ')} to {name}.",
-            backstory=self._persona_hint(hr_lead),
+            backstory=backstory,
             llm=self._worker_llm,
         )
         task = Task(
@@ -738,7 +707,7 @@ class ExternalEmailIngestor:
                 f"You are {hr_lead} at {self._company_name}. Write a "
                 f"{'warm offer letter' if email_type == 'offer_letter' else 'friendly onboarding prep email'} "
                 f"to {name}, joining as {role} in {dept} in {days_until} day(s).\n"
-                f"Under 120 words. Warm, professional. No [PLACEHOLDER] tokens. "
+                f"Under 120 words. Warm, professional. Use your typing quirks. No [PLACEHOLDER] tokens. "
                 f"Output body only."
             ),
             expected_output="Email body under 120 words.",
@@ -798,7 +767,6 @@ class ExternalEmailIngestor:
             },
         )
 
-        # Store so employee_hired can link this into its causal chain
         hire["_hr_email_embed_id"] = embed_id
 
         self._mem.log_event(
@@ -829,10 +797,6 @@ class ExternalEmailIngestor:
             f"({days_until}d before Day {hire['day']})"
         )
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # OUTBOUND REPLIES
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _send_customer_reply(
         self,
         signal: ExternalEmailSignal,
@@ -856,10 +820,15 @@ class ExternalEmailIngestor:
             else "This is routine — thank them, confirm receipt, and say the team will be in touch."
         )
 
+        backstory = get_voice_card(
+            sales_lead, "async", graph_dynamics=None, mem=self._mem
+        )
+        p = self._personas.get(sales_lead, {})
+
         agent = make_agent(
-            role=f"{sales_lead}, Sales Lead",
+            role=f"{sales_lead} — {p.get('social_role', 'Sales Lead')}",
             goal=f"Reply to a customer email on behalf of {self._company_name}.",
-            backstory=self._persona_hint(sales_lead),
+            backstory=backstory,
             llm=self._worker_llm,
         )
         task = Task(
@@ -868,7 +837,7 @@ class ExternalEmailIngestor:
                 f"You received this email from {signal.source_name}:\n"
                 f"Subject: {signal.subject}\n{signal.full_body}\n\n"
                 f"{urgency_hint}\n"
-                f"Under 80 words. Professional, warm. No [PLACEHOLDER] tokens. "
+                f"Under 80 words. Professional, warm. Use your typing quirks. No [PLACEHOLDER] tokens. "
                 f"Output body only — no subject line."
             ),
             expected_output="Email reply body under 80 words.",
@@ -978,7 +947,6 @@ class ExternalEmailIngestor:
         """
         ack_time, _ = self._clock.sync_and_advance([recipient], hours=0.3)
 
-        # Surface the JIRA id if one was opened, so the reply can reference it
         jira_ref = next(
             (
                 a
@@ -993,10 +961,15 @@ class ExternalEmailIngestor:
             else "No ticket number yet — just say it is being investigated."
         )
 
+        backstory = get_voice_card(
+            recipient, "async", graph_dynamics=None, mem=self._mem
+        )
+        p = self._personas.get(recipient, {})
+
         agent = make_agent(
-            role=f"{recipient}, Engineer",
+            role=f"{recipient} — {p.get('social_role', 'Engineer')}",
             goal=f"Acknowledge a vendor alert email on behalf of {self._company_name}.",
-            backstory=self._persona_hint(recipient),
+            backstory=backstory,
             llm=self._worker_llm,
         )
         task = Task(
@@ -1006,7 +979,7 @@ class ExternalEmailIngestor:
                 f"Subject: {signal.subject}\n{signal.full_body}\n\n"
                 f"Write a short acknowledgment email. Confirm receipt, state "
                 f"you are investigating. {jira_hint}\n"
-                f"Under 60 words. Technical, professional. Output body only."
+                f"Under 60 words. Technical, professional. Use your typing quirks. Output body only."
             ),
             expected_output="Acknowledgment email body under 60 words.",
             agent=agent,
@@ -1100,10 +1073,6 @@ class ExternalEmailIngestor:
         )
         logger.info(f"    [cyan]📤 Ack → {signal.source_name}:[/cyan] {subject[:80]}")
         return embed_id
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # DROPPED EMAIL
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _log_dropped_email(self, signal: ExternalEmailSignal, state) -> None:
         """
