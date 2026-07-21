@@ -1,0 +1,40 @@
+{
+  "classification": "synthetic_non_confidential",
+  "id": "SYN-EX-9",
+  "key": "SYN-EX-9",
+  "fields": {
+    "summary": "Recheck an old retry note",
+    "description": "The original request did not identify which mobile versions were affected.\n\nEnvironment:\n\nExpected:\n\nObserved:",
+    "issuetype": "Task",
+    "status": "To Do",
+    "priority": null,
+    "assignee": null,
+    "reporter": "Hanna",
+    "labels": ["needs-triage"],
+    "created": "2025-09-03T14:12:00+00:00",
+    "updated": "2025-09-03T14:12:00+00:00",
+    "stale_record": true,
+    "attachment": []
+  },
+  "comments": [
+    {
+      "id": "comment-syn-1",
+      "author": "Miki",
+      "created": "2025-09-03T14:20:00+00:00",
+      "body": "which client version?"
+    }
+  ],
+  "changelog": [
+    {
+      "id": "history-syn-1",
+      "created": "2025-09-03T14:19:00+00:00",
+      "items": [
+        {
+          "field": "labels",
+          "fromString": null,
+          "toString": "needs-triage"
+        }
+      ]
+    }
+  ]
+}

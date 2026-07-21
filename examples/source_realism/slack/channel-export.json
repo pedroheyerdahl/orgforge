@@ -1,0 +1,86 @@
+{
+  "classification": "synthetic_non_confidential",
+  "channel": {
+    "id": "CSYNENG01",
+    "name": "engineering",
+    "is_archived": false
+  },
+  "users": {
+    "USYNHANNA": "Hanna",
+    "USYNMIKI01": "Miki",
+    "BSYNBUILD1": "Build Monitor"
+  },
+  "messages": [
+    {
+      "type": "message",
+      "user": "USYNHANNA",
+      "text": "retry banner still has the old copy",
+      "ts": "1767344700.000000",
+      "client_msg_id": "slack-msg-example-root",
+      "edited": {
+        "user": "USYNHANNA",
+        "ts": "1767344820.000000"
+      },
+      "reactions": [
+        {
+          "name": "eyes",
+          "count": 2,
+          "users": ["USYNHANNA", "USYNMIKI01"]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "user": "USYNMIKI01",
+      "text": "logs",
+      "ts": "1767345000.000000",
+      "client_msg_id": "slack-msg-example-file",
+      "files": [
+        {
+          "id": "FSYNTRACE1",
+          "name": "retry-check.txt",
+          "mimetype": "text/plain",
+          "size": 1842
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "user": "BSYNBUILD1",
+      "text": "mobile build completed with warnings",
+      "ts": "1767345300.000000",
+      "subtype": "bot_message",
+      "bot_id": "BSYNBUILD1",
+      "blocks": [
+        {
+          "type": "section",
+          "block_id": "synthetic-build-summary"
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "user": "USYNHANNA",
+      "text": "anyone know who owns this?",
+      "ts": "1767345600.000000",
+      "client_msg_id": "slack-msg-example-unresolved"
+    }
+  ],
+  "threads": {
+    "1767344700.000000": [
+      {
+        "type": "message",
+        "user": "USYNMIKI01",
+        "text": "looking after standup",
+        "ts": "1767344880.000000",
+        "thread_ts": "1767344700.000000",
+        "client_msg_id": "slack-msg-example-reply"
+      }
+    ]
+  },
+  "state": {
+    "latest_ts": "1767345600.000000",
+    "complete": true,
+    "classification": "synthetic_non_confidential"
+  }
+}

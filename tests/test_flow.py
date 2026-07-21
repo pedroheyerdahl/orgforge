@@ -153,6 +153,24 @@ def test_git_simulator_reviewer_selection(mock_flow):
     assert pr["reviewers"][0] == "Bob"
 
 
+def test_git_simulator_handles_departed_author_missing_from_graph(mock_flow):
+    """Stale tickets can replay after an assignee has left the live org graph."""
+    mock_flow.social_graph.clear()
+    mock_flow.social_graph.add_node("Alice", dept="Engineering")
+    mock_flow.social_graph.add_node("Bob", dept="Engineering")
+    mock_flow.social_graph.remove_node("Alice")
+
+    pr = mock_flow._git.create_pr(
+        author="Alice",
+        ticket_id="TKT-STALE",
+        title="Finish stale assigned work",
+        timestamp="2026-03-05T13:33:51.027Z",
+    )
+
+    assert pr["author"] == "Alice"
+    assert pr["reviewers"] == ["Bob"]
+
+
 def test_relevant_external_contacts(mock_flow):
     """Verifies external contacts are triggered by correct events and health thresholds."""
     contacts = [

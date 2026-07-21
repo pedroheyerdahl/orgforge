@@ -1,6 +1,8 @@
 import pytest
 import mongomock
 import builtins
+import tempfile
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 from memory import Memory
 
@@ -13,6 +15,17 @@ def smart_open(filename, mode="r", *args, **kwargs):
     to read their internal files. Mocks OrgForge config reads and ALL file writes.
     """
     fname = str(filename)
+
+    # Test fixtures need real temporary files; only intercept OrgForge's
+    # configuration and runtime writes.
+    try:
+        is_test_temp = Path(fname).resolve().is_relative_to(
+            Path(tempfile.gettempdir()).resolve()
+        )
+    except (OSError, ValueError):
+        is_test_temp = False
+    if is_test_temp or fname.startswith("/tmp/") or fname.startswith("/private/tmp/"):
+        return real_open(filename, mode, *args, **kwargs)
 
     if mode in ("w", "w+", "a", "a+", "wb", "ab") or "config.yaml" in fname:
         m = MagicMock()
@@ -74,6 +87,7 @@ def mock_config_and_db():
         "simulation": {
             "company_name": "TestCorp",
             "domain": "test.com",
+            "company_description": "A test organization.",
             "start_date": "2026-01-01",
             "max_days": 1,
         },

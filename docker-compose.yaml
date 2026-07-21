@@ -107,7 +107,8 @@ services:
 
     volumes:
       - ./export:/app/export # Simulation output — persists on host
-      - ./config/config.yaml:/app/config/config.yaml # Config — edit on host, picked up at runtime
+      - ./config:/app/config:ro # Config — edit on host, picked up at runtime
+      - ./examples:/app/examples:ro # Synthetic source-shape examples for validation
       - ./src:/app/src
     command: ["python", "src/flow.py"]
 

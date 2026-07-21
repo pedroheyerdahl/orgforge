@@ -8,6 +8,7 @@ Single source of truth for all constants.
 from __future__ import annotations
 
 from dotenv import load_dotenv
+import os
 
 from pathlib import Path
 from typing import Any, Dict
@@ -34,12 +35,23 @@ if _data is None:
 
 CONFIG: Dict[str, Any] = _data
 
+# Keep calibration controls out of the committed world configuration. These
+# overrides are intentionally narrow so a short run cannot silently change the
+# organization profile or model selection.
+if os.environ.get("ORGFORGE_MAX_DAYS"):
+    CONFIG["simulation"]["max_days"] = int(os.environ["ORGFORGE_MAX_DAYS"])
+if os.environ.get("ORGFORGE_OUTPUT_DIR"):
+    CONFIG["simulation"]["output_dir"] = os.environ["ORGFORGE_OUTPUT_DIR"]
+
 
 COMPANY_NAME = CONFIG["simulation"]["company_name"]
 COMPANY_DOMAIN = CONFIG["simulation"]["domain"]
 COMPANY_DESCRIPTION = CONFIG["simulation"]["company_description"]
 INDUSTRY = CONFIG["simulation"].get("industry", "technology")
 BASE = CONFIG["simulation"].get("output_dir", str(EXPORT_DIR))
+if os.environ.get("ORGFORGE_OUTPUT_DIR"):
+    EXPORT_DIR = Path(os.environ["ORGFORGE_OUTPUT_DIR"]).resolve()
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 ORG_CHART = CONFIG["org_chart"]
 LEADS = CONFIG["leads"]
 PERSONAS = CONFIG["personas"]

@@ -234,6 +234,8 @@ class OrgLifecycleManager:
         state,
         timestamp: str,
         author: Optional[str] = None,
+        topics_outside_expertise: Optional[List[str]] = None,
+        claims_approximated: Optional[List[str]] = None,
     ) -> List[KnowledgeGapEvent]:
         """
         Detect knowledge gaps deterministically using BM25 text search against
@@ -276,6 +278,10 @@ class OrgLifecycleManager:
             author:        Optional author name; if provided, gaps where the
                            author is in known_by for all affected domains are
                            suppressed (they already have coverage).
+            topics_outside_expertise / claims_approximated: Optional audit
+                metadata supplied by Confluence generation. The deterministic
+                gap scan uses the full text, but accepts these fields so the
+                writer and lifecycle manager share one call contract.
         """
         found: List[KnowledgeGapEvent] = []
 

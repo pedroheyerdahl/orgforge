@@ -1,0 +1,26 @@
+{
+  "classification": "synthetic_non_confidential",
+  "id": "CONF-SYN-EX-3",
+  "type": "page",
+  "status": "draft",
+  "title": "retry notes",
+  "space": {
+    "key": "SYNENG",
+    "name": "Synthetic Engineering"
+  },
+  "version": {
+    "number": 2,
+    "when": "2026-01-04T16:08:00+00:00",
+    "by": "Hanna",
+    "message": "added the thing from the thread"
+  },
+  "body": {
+    "storage": {
+      "representation": "storage",
+      "value": "<p>check mobile too</p><p>link was in the thread somewhere</p><p></p>"
+    }
+  },
+  "extensions": {
+    "classification": "synthetic_non_confidential"
+  }
+}

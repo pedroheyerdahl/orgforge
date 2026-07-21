@@ -64,6 +64,13 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from crewai import Process, Task, Crew
 
 from memory import Memory, SimEvent
+from run_resilience import (
+    ResilienceBudgetExceeded,
+    RunResilience,
+    SpendBudgetExceeded,
+    load_resume_day,
+    validate_run_flags,
+)
 from graph_dynamics import GraphDynamics
 from sim_clock import SimClock
 from org_lifecycle import (
@@ -93,6 +100,22 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("orgforge.flow")
+
+RUN_RESILIENCE = RunResilience(
+    Path(BASE),
+    max_unrecovered=int(os.environ.get("ORGFORGE_MAX_UNRECOVERED_LLM_FAILURES", "3")),
+    max_spend_usd=(
+        float(os.environ["ORGFORGE_MAX_SPEND_USD"])
+        if os.environ.get("ORGFORGE_MAX_SPEND_USD")
+        else None
+    ),
+    input_price_per_million=float(
+        os.environ.get("ORGFORGE_BUDGET_INPUT_PRICE_PER_MILLION", "5.0")
+    ),
+    output_price_per_million=float(
+        os.environ.get("ORGFORGE_BUDGET_OUTPUT_PRICE_PER_MILLION", "30.0")
+    ),
+)
 
 logging.getLogger("pymongo").setLevel(logging.WARNING)
 
@@ -187,20 +210,50 @@ def build_llm(model_key: str, temperature: float = 0.3):
         return LLM(model=model, base_url=base_url, temperature=temperature, max_tokens=16384)
 
     from crewai import LLM
+    from llm_resilience import (
+        install_openai_permission_retry,
+        install_responses_usage_logging,
+    )
 
-    kwargs = {
-        "model": model,
-        "temperature": temperature,
-        "max_tokens": 16384,
-    }
+    if _PROVIDER == "openai":
+        from crewai.llms.providers.openai.completion import OpenAICompletion
+
+        install_responses_usage_logging(OpenAICompletion, logger)
+        install_openai_permission_retry(
+            LLM,
+            _PRESET.get("fallback"),
+            event_sink=RUN_RESILIENCE.record,
+        )
 
     provider = _PRESET.get("provider", "openai")
+    kwargs = {
+        "model": model,
+        "max_completion_tokens": int(
+            os.environ.get(
+                "ORGFORGE_PLANNER_MAX_TOKENS"
+                if model_key == "planner"
+                else "ORGFORGE_WORKER_MAX_TOKENS",
+                "16384",
+            )
+        ),
+        "reasoning_effort": os.environ.get(
+            "ORGFORGE_PLANNER_REASONING_EFFORT"
+            if model_key == "planner"
+            else "ORGFORGE_WORKER_REASONING_EFFORT",
+            "medium" if model_key == "planner" else "low",
+        ),
+    }
+
+    # GPT-5.6 reasoning models only accept their default temperature.
+    if not (provider == "openai" and model.startswith("gpt-5")):
+        kwargs["temperature"] = temperature
 
     if provider == "bedrock":
         kwargs["region_name"] = _PRESET.get(
             "aws_region", os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
         )
     elif provider == "openai":
+        kwargs["api"] = _PRESET.get("api", "completions")
         custom_url = _PRESET.get("base_url") or os.environ.get("OPENAI_BASE_URL")
         if custom_url:
             kwargs["base_url"] = custom_url
@@ -440,14 +493,21 @@ class GitSimulator:
         pr_id = f"PR-{self._mem._prs.count_documents({}) + 100}"
 
         if not reviewers:
-            edges = self._graph[author]
-
-            eng_colleagues = {
-                n: edges[n].get("weight", 1.0)
-                for n in edges
-                if "engineer" in self._graph.nodes[n].get("dept", "").lower()
-                and n != author
-            }
+            if author in self._graph:
+                edges = self._graph[author]
+                eng_colleagues = {
+                    n: edges[n].get("weight", 1.0)
+                    for n in edges
+                    if "engineer" in self._graph.nodes[n].get("dept", "").lower()
+                    and n != author
+                }
+            else:
+                eng_colleagues = {
+                    n: 0.0
+                    for n, attrs in self._graph.nodes(data=True)
+                    if "engineer" in attrs.get("dept", "").lower()
+                    and n != author
+                }
 
             if eng_colleagues:
                 sorted_eng = sorted(
@@ -663,6 +723,7 @@ class OrgForgeSimulation:
     def __init__(self, mem: Optional[Memory] = None):
         self.state = State()
         self._mem = mem if mem is not None else Memory()
+        self._resilience = RUN_RESILIENCE
 
         self.graph_dynamics = GraphDynamics(
             build_social_graph(self._mem), CONFIG, self._mem
@@ -807,10 +868,52 @@ class OrgForgeSimulation:
         counts = self.state.daily_event_type_counts
         counts[event_type] = counts.get(event_type, 0) + 1
 
-    def run(self):
+    def run(self, resume: bool = False) -> bool:
         """Main entry point. Runs genesis then the daily simulation loop."""
-        self.genesis_phase()
-        self.daily_cycle()
+        try:
+            if not resume:
+                self.genesis_phase()
+            if self._resilience.should_stop():
+                raise ResilienceBudgetExceeded()
+            if self._resilience.spend_exceeded():
+                raise SpendBudgetExceeded()
+            self.daily_cycle()
+        except ResilienceBudgetExceeded:
+            logger.error(
+                "[resilience] LLM error budget exhausted; stopping before the next day."
+            )
+            self._resilience.write_status("stopped_error_budget", next_day=self.state.day)
+            return False
+        except SpendBudgetExceeded:
+            spend = self._resilience.conservative_spend_usd()
+            logger.error(
+                f"[resilience] Conservative spend budget reached (${spend:.2f}); "
+                "stopping before the next day."
+            )
+            self._resilience.write_status("stopped_spend_budget", next_day=self.state.day)
+            return False
+        except Exception:
+            self._resilience.write_status("failed_unexpectedly", next_day=self.state.day)
+            raise
+        else:
+            if self._resilience.unrecovered:
+                self._resilience.write_status("failed_unexpectedly", next_day=self.state.day)
+                return False
+            self._resilience.write_status("completed", next_day=None)
+            return True
+        finally:
+            # Provenance must survive a failed or interrupted calibration run.
+            # Clearweave needs to distinguish an incomplete delivery from an
+            # apparently empty simulation.
+            self._write_event_export()
+
+    def _write_event_export(self):
+        """Write a stable event sidecar for downstream corpus provenance."""
+        path = Path(BASE) / "simulation_events.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as fh:
+            for event in self._mem.get_event_log(from_db=True):
+                fh.write(json.dumps(event.to_dict(), ensure_ascii=False, default=str) + "\n")
 
     def genesis_phase(self):
         logger.info(
@@ -952,6 +1055,10 @@ class OrgForgeSimulation:
                 self.graph_dynamics._centrality_dirty = True
 
         while self.state.day <= self.state.max_days:
+            if self._resilience.should_stop():
+                raise ResilienceBudgetExceeded()
+            if self._resilience.spend_exceeded():
+                raise SpendBudgetExceeded()
             dow = self.state.current_date.weekday()
             if dow >= 5:
                 logger.info(
@@ -2916,6 +3023,7 @@ class OrgForgeSimulation:
 
 if __name__ == "__main__":
     import argparse
+    import random
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -2923,9 +3031,46 @@ if __name__ == "__main__":
         action="store_true",
         help="Wipe MongoDB and export dir before running",
     )
+    parser.add_argument("--seed", type=int, default=42, help="Deterministic simulation seed")
+    parser.add_argument(
+        "--no-post-sim",
+        action="store_true",
+        help="Skip post-simulation artifacts during calibration",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from a resilience checkpoint without resetting data",
+    )
     args = parser.parse_args()
 
-    mem = genesis.initialize(config=CONFIG, planner_llm=PLANNER_MODEL, reset=args.reset)
+    try:
+        validate_run_flags(args.reset, args.resume)
+        if args.resume:
+            resume_day = load_resume_day(Path(BASE))
+            logger.info(f"[resilience] Resuming from checkpoint for Day {resume_day}.")
+    except (ValueError, FileNotFoundError, KeyError, json.JSONDecodeError) as error:
+        parser.error(str(error))
+
+    random.seed(args.seed)
+
+    mem = (
+        Memory()
+        if args.resume
+        else genesis.initialize(config=CONFIG, planner_llm=PLANNER_MODEL, reset=args.reset)
+    )
 
     sim = OrgForgeSimulation(mem=mem)
-    sim.run()
+    if args.no_post_sim:
+        original_post_sim = run_post_sim
+
+        def skip_post_sim(**_kwargs):
+            return None
+
+        run_post_sim = skip_post_sim
+        try:
+            sim.run(resume=args.resume)
+        finally:
+            run_post_sim = original_post_sim
+    else:
+        sim.run(resume=args.resume)

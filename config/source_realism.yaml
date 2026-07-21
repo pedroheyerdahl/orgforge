@@ -1,0 +1,35 @@
+version: 1
+classification: synthetic_non_confidential
+
+# Broad synthetic ranges chosen for extraction realism. These values are not
+# copied from, fitted to, or loaded from any proprietary corpus.
+routine_activity_per_channel: 7
+ensure_calibration_features: true
+stale_age_days: 120
+redelivery_rate: 0.12
+semantic_inbox_datadog_limit: 1000
+
+transcript:
+  disfluency_rate: 0.12
+  punctuation_damage_rate: 0.18
+  repeated_fragment_rate: 0.08
+
+observation_realism:
+  version: 5
+  slack_punctuation_damage_pct: 48
+  slack_reaction_pct: 15
+  slack_file_pct: 5
+  slack_edit_pct: 5
+  slack_redelivery_pct: 3
+  slack_link_pct: 10
+  slack_mention_pct: 12
+  slack_code_pct: 4
+  slack_question_pct: 14
+  slack_block_pct: 3
+  slack_attachment_pct: 2
+  slack_ack_thread_pct: 2
+  slack_ordinary_thread_pct: 4
+  slack_long_thread_pct: 1
+  transcript_chunk_words: 42
+  transcript_backchannel_pct: 12
+  routine_git_interval_days: 14

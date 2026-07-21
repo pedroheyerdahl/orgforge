@@ -16,7 +16,7 @@
 #                Best output quality. Requires AWS credentials and
 #                OPENAI_API_KEY. Use for production dataset generation.
 #
-quality_preset: "cloud"
+quality_preset: "openai_corpus"
 
 model_presets:
   local_gpu:
@@ -31,6 +31,16 @@ model_presets:
     worker: "DeepSeek-V4-Pro"
     aws_region: "us-east-2" # ← only needed for bedrock
     base_url: "https://tenure-foundry.services.ai.azure.com/openai/v1" 
+
+  openai_corpus:
+    provider: "openai"
+    # Luna is exposed to this project through the Responses API, not legacy
+    # Chat Completions. It is the cost-effective default for corpus generation.
+    api: "responses"
+    planner: "gpt-5.6-luna"
+    worker: "gpt-5.6-luna"
+    # Retry transient permission responses on Luna itself. Keeping this run on
+    # one priced model makes the local spend ceiling exact and auditable.
 
 # ── SIMULATION ────────────────────────────────────────────────
 simulation:

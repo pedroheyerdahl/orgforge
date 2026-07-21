@@ -327,6 +327,40 @@ class TestDepartmentPlannerParsePlan:
         plan, _ = dept_planner._parse_plan(raw, "Theme", 5, "2026-01-05", [])
         assert plan.theme == "Steady progress on reliability improvements"
 
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda data: data.__setitem__("engineer_plans", [["truncated"]]),
+            lambda data: data["engineer_plans"][0].__setitem__(
+                "agenda", [["truncated"]]
+            ),
+            lambda data: data.__setitem__("proposed_events", [["truncated"]]),
+        ],
+        ids=["engineer-plan", "agenda-item", "proposed-event"],
+    )
+    def test_repaired_nested_lists_are_ignored(self, dept_planner, mutate):
+        """Malformed nested LLM entries must degrade to defaults, not crash a run."""
+        data = copy.deepcopy(VALID_PLAN_JSON)
+        mutate(data)
+
+        plan, _ = dept_planner._parse_plan(
+            json.dumps(data), "Theme", 5, "2026-01-05", []
+        )
+
+        assert {ep.name for ep in plan.engineer_plans} == {"Alice", "Bob"}
+
+    def test_empty_estimated_hours_uses_default(self, dept_planner):
+        """Truncated numeric planner fields must not terminate a long run."""
+        data = copy.deepcopy(VALID_PLAN_JSON)
+        data["engineer_plans"][0]["agenda"][0]["estimated_hrs"] = ""
+
+        plan, _ = dept_planner._parse_plan(
+            json.dumps(data), "Theme", 5, "2026-01-05", []
+        )
+
+        alice = next(ep for ep in plan.engineer_plans if ep.name == "Alice")
+        assert alice.agenda[0].estimated_hrs == 2.0
+
     def test_invented_name_in_llm_response_is_dropped(self, dept_planner):
         data = copy.deepcopy(VALID_PLAN_JSON)
         data["engineer_plans"] = data["engineer_plans"] + [

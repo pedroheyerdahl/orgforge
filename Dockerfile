@@ -1,10 +1,12 @@
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 ARG INSTALL_CLOUD_DEPS=false
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
+
+ENV UV_PYTHON_PREFERENCE=only-system
 
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
