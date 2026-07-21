@@ -1,0 +1,25 @@
+{
+  "classification": "synthetic_non_confidential",
+  "meeting_id": "zoom-syn-example-4",
+  "topic": "Retry-state check",
+  "started_at": "2026-01-04T15:00:00+00:00",
+  "participants": ["Hanna", "Miki"],
+  "variants": {
+    "machine": "Hanna: so um the retry thing is still using the old copy Miki: yeah i need to check the mobile... the mobile state Hanna: okay let's pick this up after standup",
+    "corrected": "Hanna: The retry banner is still using the previous copy. Miki: I need to check the mobile state. Hanna: Let's pick this up after standup."
+  },
+  "speaker_segments": [
+    {
+      "speaker": "Hanna",
+      "start_ms": 0,
+      "end_ms": 4380,
+      "confidence": 0.86
+    },
+    {
+      "speaker": "Miki",
+      "start_ms": 4110,
+      "end_ms": 10220,
+      "confidence": 0.64
+    }
+  ]
+}

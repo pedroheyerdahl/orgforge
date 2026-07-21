@@ -36,7 +36,7 @@ def initialize(config, planner_llm, reset=False):
     mem = Memory()
 
     if reset:
-        mem.reset(export_dir=config.get("base_dir", "export"))
+        mem.reset(export_dir=config.get("base_dir", BASE))
         logger.info("[genesis] 🧹 Database and exports wiped.")
 
     logger.info("[genesis] 🚀 Seeding corporate ground truth...")

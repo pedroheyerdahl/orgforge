@@ -1,0 +1,9 @@
+schema_version: 1
+name: clearweave-180d
+seed: 42
+target_start: 2026-01-01
+target_days: 180
+observation_realism: true
+datadog_inbox_limit: 1000
+require_run_health: true
+expected_realism_policy_version: 5

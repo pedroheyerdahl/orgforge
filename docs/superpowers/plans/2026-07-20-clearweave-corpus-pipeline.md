@@ -139,11 +139,15 @@ content; generic forbidden-pattern tests may appear in validator test/code only.
 
 Run: `uv run pytest -q`
 
-Run: `uv run ruff check src tests`
+Run: `uv run ruff check src/corpus_pipeline.py src/build_clearweave_corpus.py tests/test_corpus_pipeline.py`
+
+Run correctness lint for the newly added corpus modules and tests with the
+repository's legacy line-length and `zip(strict=...)` backlog excluded.
 
 Run: `git diff --check`
 
-Expected: zero failures, zero lint errors, and zero whitespace errors.
+Expected: zero test failures, zero new-pipeline lint errors, zero correctness
+errors in newly added corpus files, and zero whitespace errors.
 
 - [ ] **Step 4: Audit and commit the intended change set**
 

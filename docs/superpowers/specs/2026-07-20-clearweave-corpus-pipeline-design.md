@@ -89,8 +89,10 @@ replay, render, score, and manifest.
 
 Tests must prove profile validation, refusal to overwrite without authorization,
 non-promotion on validation failure, atomic successful replacement, report
-creation, and an end-to-end no-cost fixture build. The full OrgForge suite and
-Ruff must pass before publication.
+creation, and an end-to-end no-cost fixture build. The full OrgForge test suite
+must pass before publication. The new orchestrator receives the complete Ruff
+rule set; newly added legacy-policy modules receive correctness lint while the
+repository's existing line-length backlog remains separate maintenance work.
 
 ## Publication boundary
 

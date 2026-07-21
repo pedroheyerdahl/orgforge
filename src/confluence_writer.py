@@ -175,7 +175,7 @@ class ConfluenceWriter:
                     f"{_ALIAS_JSON_FIELDS}"
                     f"}}"
                 ),
-                expected_output=(f"Valid JSON with markdown_doc and aliases keys."),
+                expected_output="Valid JSON with markdown_doc and aliases keys.",
                 agent=historian,
             )
 
@@ -482,8 +482,8 @@ class ConfluenceWriter:
         ]
         claims_approximated = audit.get("claims_i_approximated", [])
         sections_thin = audit.get("sections_i_left_thin", [])
-
-
+        domain_fit = self._compute_domain_fit(author, topic)
+        gap_classification = self._compute_gap_classification(author, topic)
 
         conf_ids = self._finalize_page(
             raw_content=content,

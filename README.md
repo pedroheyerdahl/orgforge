@@ -20,6 +20,7 @@ The dataset is the exhaust of a living simulation. Engineers leave mid-sprint, f
 - [Why Does This Exist?](#why-does-this-exist)
 - [What the Output Looks Like](#what-the-output-looks-like)
 - [What Gets Generated](#what-gets-generated)
+- [Building a Replayable Clearweave Corpus](#building-a-replayable-clearweave-corpus)
 - [Architecture & Mechanics](#architecture--mechanics)
 - [The Departure Cascade](#the-departure-cascade)
 - [Insider Threat Simulation](#insider-threat-simulation)
@@ -106,6 +107,47 @@ A default 22-day simulation produces:
 | `invoices/`                | End-of-month customer invoices featuring SLA credit line items calculated directly from incident duration                   |
 | `simulation_snapshot.json` | Full state: incidents, morale curve, system health, relationship graph, departed employees, new hires, knowledge gap events |
 | `simulation.log`           | Complete chronological system and debug logs for the entire run                                                             |
+
+
+## Building a replayable Clearweave corpus
+
+OrgForge corpus generation has two distinct phases:
+
+1. The simulator produces the organization's semantic source export. This is
+   the phase that may use configured language models.
+2. The deterministic corpus pipeline converts that export into source-shaped
+   observations, lifecycle deliveries, ingestion text, provenance, and gold
+   candidates. This phase makes no model or API calls.
+
+Use the committed 180-day profile to run the second phase:
+
+```bash
+uv run python src/build_clearweave_corpus.py \
+  export/<completed-source-export> \
+  export/<clearweave-corpus> \
+  --profile config/clearweave_180d.yaml
+```
+
+If the destination already exists, add `--replace`. The command builds in a
+temporary sibling directory, runs every required corpus gate, and replaces the
+destination only after validation passes. It removes the temporary previous
+copy after promotion; it does not retain backup corpus folders. Add
+`--keep-failed` only when you want to inspect a failed staged build.
+
+The package has five consumer-facing areas:
+
+| Directory | Purpose |
+| --- | --- |
+| `raw/` | Native-ish final objects shaped like source-system exports |
+| `deliveries/` | Daily create, update, delete, and redelivery actions for replay |
+| `inbox/` | Source-specific text and email projections for text ingestion |
+| `provenance/` | Stable action IDs, manifest, checksums, scorecard, scenarios, run evidence, and build report |
+| `gold/` | Evaluation candidates that remain untrusted until human review |
+
+The profile fixes the seed, declared window, realism pass, Datadog projection
+limit, run-health gate, and expected realism-policy version. See the
+[source-realism calibration runbook](docs/source-realism-calibration-runbook.md)
+for simulation, budget, failure, and publication details.
 
 
 ## Architecture & Mechanics

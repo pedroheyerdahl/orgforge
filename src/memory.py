@@ -11,6 +11,7 @@ Usage:
 from datetime import datetime, timezone
 import os
 import json
+import hashlib
 import logging
 from dataclasses import dataclass, field, asdict
 import re
@@ -2101,33 +2102,50 @@ class Memory:
         if not messages:
             return ("", "")
 
-        date_str = messages[0].get("date")
-        thread_id = f"slack_{channel}_{messages[0].get('ts', datetime.now(timezone.utc).isoformat())}"
-
-        for m in messages:
-            m["thread_id"] = thread_id
-
         channel_dir = export_dir / "slack" / "channels" / channel
         channel_dir.mkdir(parents=True, exist_ok=True)
-        file_path = channel_dir / f"{date_str}.json"
+        normalized: List[Dict] = []
+        for message in messages:
+            m = dict(message)
+            ts = str(m.get("ts", ""))
+            # The record date must agree with the source timestamp. Preserve the
+            # original only when no parseable timestamp is available.
+            source_date = ts[:10] if len(ts) >= 10 and ts[4] == "-" and ts[7] == "-" else m.get("date")
+            m["date"] = source_date
+            root_ts = m.get("thread_ts") or ts
+            thread_id = f"slack_{channel}_{root_ts}"
+            m["thread_id"] = thread_id
+            m["root_id"] = m.get("root_id") or thread_id
+            if not m.get("message_id"):
+                identity = "|".join(str(m.get(key, "")) for key in ("user", "ts", "text"))
+                m["message_id"] = "slack-msg-" + hashlib.sha256(
+                    f"{channel}|{identity}".encode("utf-8")
+                ).hexdigest()[:20]
+            normalized.append(m)
 
-        history = []
-        if file_path.exists():
-            with open(file_path, "r") as f:
-                try:
-                    history = json.load(f)
-                except json.JSONDecodeError:
-                    pass
-
-        history.extend(messages)
-        with open(file_path, "w") as f:
-            json.dump(history, f, indent=2)
+        grouped: Dict[str, List[Dict]] = {}
+        for message in normalized:
+            grouped.setdefault(str(message.get("date") or "unknown"), []).append(message)
+        for date_str, date_messages in grouped.items():
+            file_path = channel_dir / f"{date_str}.json"
+            history = []
+            if file_path.exists():
+                with open(file_path, "r") as f:
+                    try:
+                        history = json.load(f)
+                    except json.JSONDecodeError:
+                        pass
+            history.extend(date_messages)
+            with open(file_path, "w") as f:
+                json.dump(history, f, indent=2)
 
         db_docs = [
-            {**m, "channel": channel, "file_path": str(file_path)} for m in messages
+            {**m, "channel": channel, "file_path": str(channel_dir / f"{m['date']}.json")}
+            for m in normalized
         ]
         self._slack.insert_many(db_docs)
-        return (str(file_path), thread_id)
+        first = normalized[0]
+        return (str(channel_dir / f"{first['date']}.json"), first["thread_id"])
 
     def get_slack_history(self, channel: str, limit: int = 10) -> List[Dict]:
         return list(self._slack.find({"channel": channel}).sort("ts", -1).limit(limit))

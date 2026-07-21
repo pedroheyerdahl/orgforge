@@ -443,12 +443,16 @@ class DepartmentPlanner:
 
         eng_plans: List[EngineerDayPlan] = []
         for ep in data.get("engineer_plans", []):
+            if not isinstance(ep, dict):
+                continue
             name = ep.get("name", "")
             if name not in self.members:
                 continue
 
             agenda = []
             for a in ep.get("agenda", []):
+                if not isinstance(a, dict):
+                    continue
                 activity_type = a.get("activity_type", "ticket_progress")
                 related_id = a.get("related_id")
 
@@ -475,13 +479,17 @@ class DepartmentPlanner:
                     and raw_medium in ("slack", "zoom")
                     else "slack"
                 )
+                try:
+                    estimated_hrs = float(a.get("estimated_hrs", 2.0))
+                except (TypeError, ValueError):
+                    estimated_hrs = 2.0
                 agenda.append(
                     AgendaItem(
                         activity_type=activity_type,
                         description=a.get("description", ""),
                         related_id=related_id,
                         collaborator=valid_collabs,
-                        estimated_hrs=float(a.get("estimated_hrs", 2.0)),
+                        estimated_hrs=estimated_hrs,
                         meeting_medium=meeting_medium,
                     )
                 )
@@ -539,6 +547,8 @@ class DepartmentPlanner:
 
         proposed: List[ProposedEvent] = []
         for pe in data.get("proposed_events", []):
+            if not isinstance(pe, dict):
+                continue
             actors = [a for a in pe.get("actors", []) if a]
             if not actors:
                 actors = self.members[:1]

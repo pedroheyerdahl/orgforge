@@ -24,6 +24,7 @@ from planner_models import (
 )
 from causal_chain_handler import CausalChainHandler
 from insider_threat import _NullInjector
+from source_realism import conversation_shape_directive
 from utils.persona_utils import persona_utils
 
 logger = logging.getLogger("orgforge.normalday")
@@ -910,22 +911,6 @@ class NormalDayHandler:
             )
             review_history = f"\n--- PRIOR REVIEW ROUNDS ---\n{rounds}\n\n"
 
-        author_persona = self._config.get("personas", {}).get(author, {})
-        expertise_list = author_persona.get("expertise", ["general tasks"])
-        expertise_str = ", ".join(str(e) for e in expertise_list[:5])
-        author_dept = next(
-            (d for d, members in self._org_chart.items() if author in members),
-            "Unknown",
-        )
-
-        reviewer_persona = self._config.get("personas", {}).get(reviewer, {})
-        reviewer_expertise_list = reviewer_persona.get("expertise", ["general tasks"])
-        reviewer_expertise_str = ", ".join(str(e) for e in reviewer_expertise_list[:5])
-        reviewer_dept = next(
-            (d for d, members in self._org_chart.items() if reviewer in members),
-            "Unknown",
-        )
-
         orphaned_domain_context = ""
         if self._lifecycle:
             all_domains = list(
@@ -1452,7 +1437,7 @@ class NormalDayHandler:
         conversation_summary = None
         current_msg_time = datetime.fromisoformat(meeting_time_iso)
 
-        for idx, (speaker, task) in enumerate(zip(speakers, tasks)):
+        for idx, (speaker, task) in enumerate(zip(speakers, tasks, strict=True)):
             is_last = idx == len(speakers) - 1
             raw = (task.output.raw or "").strip() if task.output else ""
 
@@ -2002,7 +1987,9 @@ class NormalDayHandler:
         messages = []
         conversation_summary = None
         current_msg_time = datetime.fromisoformat(meeting_time_iso)
-        for idx, (speaker, task) in enumerate(zip(speakers[:n_turns], tasks)):
+        for idx, (speaker, task) in enumerate(
+            zip(speakers[:n_turns], tasks, strict=True)
+        ):
             is_last = idx == len(tasks) - 1
             raw = (task.output.raw or "").strip() if task.output else ""
 
@@ -3342,6 +3329,9 @@ class NormalDayHandler:
             participants[i % len(participants)] for i in range(1, random.randint(5, 8))
         ]
         speaker_sequence = ", ".join(turn_speakers)
+        shape_directive = conversation_shape_directive(
+            f"{self._state.day}|slack|{topic}|{initiator}"
+        )
 
         agent = make_agent(
             role="Slack Conversation Simulator",
@@ -3359,10 +3349,12 @@ class NormalDayHandler:
                 f"Write a full Slack thread for a design discussion.\n\n"
                 f"Topic: {topic}\n"
                 f"Relevant context: {ctx}\n\n"
+                f"Conversation shape: {shape_directive}\n\n"
                 f"Turn order: {speaker_sequence}\n\n"
                 f"Rules:\n"
                 f"- {initiator} opens by framing the problem or trade-off.\n"
-                f"- Others raise trade-offs, push back, or propose a next step. Do not just agree.\n"
+                f"- Follow the conversation shape. Do not manufacture closure, a decision, or an owner.\n"
+                f"- Participants can push back, go quiet, correct themselves, defer, or give a short acknowledgement.\n"
                 f"- CRITICAL: DO NOT use generic openers like 'Hey team, let's discuss...'\n"
                 f"- Each message 1-3 sentences max. No narration.\n\n"
                 f"Respond ONLY with a JSON array. No preamble, no markdown fences.\n"
@@ -3410,10 +3402,10 @@ class NormalDayHandler:
         """
         Zoom-transcript path for design discussions.
 
-        The LLM writes a realistic meeting transcript — attendees speak in full
-        sentences, decisions are stated explicitly, action items are called out.
-        This is the knowledge-gap surface: decisions made verbally that won't
-        appear in Jira or Confluence unless someone writes them up afterward.
+        The LLM writes a realistic meeting transcript whose outcome may be
+        resolved, unresolved, interrupted, or moved elsewhere. This is the
+        knowledge-gap surface: verbal context that may never appear in Jira or
+        Confluence unless someone writes it up afterward.
 
         Returns (file_path, transcript_id, tags).
         """
@@ -3433,6 +3425,9 @@ class NormalDayHandler:
         )
 
         attendee_list = ", ".join(participants)
+        shape_directive = conversation_shape_directive(
+            f"{self._state.day}|zoom|{topic}|{initiator}"
+        )
 
         task = Task(
             description=(
@@ -3442,13 +3437,13 @@ class NormalDayHandler:
                 f"Attendees: {attendee_list}\n"
                 f"Host/initiator: {initiator}\n"
                 f"Relevant context: {ctx}\n\n"
+                f"Conversation shape: {shape_directive}\n\n"
                 f"## Format rules\n"
                 f"- Output a JSON array. Each element is one speaker turn.\n"
                 f"- Schema: [{{'speaker': 'Name', 'message': 'text'}}]\n"
                 f"- Turns should be 1-4 sentences. People interrupt, trail off, agree, disagree.\n"
-                f"- {initiator} opens by stating the meeting goal clearly.\n"
-                f"- The group must reach at least one explicit decision or action item before the meeting ends.\n"
-                f"- Include a brief wrap-up turn from {initiator} that states the decision and who owns the follow-up.\n"
+                f"- The opening can start mid-context; it does not need to restate a polished agenda.\n"
+                f"- Follow the conversation shape. Do not invent a decision, action item, owner, or wrap-up when the shape is unresolved or moved elsewhere.\n"
                 f"- DO NOT use filler like 'Great point!' or 'Absolutely!' as standalone turns.\n"
                 f"- Speak naturally — 'gonna', contractions, occasional 'um' are fine.\n"
                 f"- NO narration, NO stage directions, NO markdown in message text.\n\n"
